@@ -60,9 +60,6 @@ int main(int argc, char** argv) {
         }
     }
 
-	    std::cout << "Reading file: " << file_name << "\n";
-    std::cout << "Using timeout: " << timeout << " seconds\n";
-    std::cout << "Number of trials: " << N_trials << "\n";
 
     Dimacs dimacs;
     CSRGraph* graph;
@@ -79,6 +76,13 @@ int main(int argc, char** argv) {
 	}
 	int my_rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
+
+    if ( my_rank == 0 ) {
+        std::cout << "Reading file: " << file_name << "\n";
+        std::cout << "Using timeout: " << timeout << " seconds\n";
+        std::cout << "Number of trials: " << N_trials << "\n";
+    }
+
 
 	double optimum_time;
 	// Test the solver multiple times on the same graph (since its not deterministic)

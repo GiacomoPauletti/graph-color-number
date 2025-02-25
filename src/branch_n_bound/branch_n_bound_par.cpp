@@ -151,115 +151,6 @@ Branch recvBranch(int source, int tag, MPI_Comm comm) {
 	return Branch::deserialize(buffer);
 }
 
-void sendInitialBranch(const Branch& b, int dest, int tag, MPI_Comm comm) {
-	std::vector<char> buffer;
-
-	// Branch serialization
-	buffer.resize(sizeof(b.lb) + sizeof(b.ub) + sizeof(b.depth));
-	char* ptr = buffer.data();
-	std::memcpy(ptr, &b.lb, sizeof(b.lb));
-	ptr += sizeof(b.lb);
-	std::memcpy(ptr, &b.ub, sizeof(b.ub));
-	ptr += sizeof(b.ub);
-	std::memcpy(ptr, &b.depth, sizeof(b.depth));
-
-	// History serialization
-	Graph::GraphHistory history = b.g->GetHistory();
-	std::string history_buffer = history.Serialize();
-	buffer.reserve(buffer.size() + history_buffer.size());
-	for ( int i = 0; i < history_buffer.size(); i++ ) {
-		buffer.push_back(history_buffer[i]);
-	}
-
-	int size = buffer.size();
-	MPI_Request request[2];	
-	int completed = 0;
-
-
-	MPI_Isend(&size, 1, MPI_INT, dest, tag, comm, &request[0]);
-    
-	MPI_Isend(buffer.data(), size, MPI_BYTE, dest, tag, comm, &request[1]);
-
-	while (!terminate_flag.load(std::memory_order_relaxed)) {
-        MPI_Testall(2, request, &completed, MPI_STATUSES_IGNORE);
-        if (completed) return;
-    }
-
-	MPI_Cancel(&request[0]);
-    MPI_Cancel(&request[1]);
-    MPI_Request_free(&request[0]);
-    MPI_Request_free(&request[1]);
-}
-
-
-/**
- * TODO DOCS
- */
-Branch recvInitialBranch(int source, int tag, MPI_Comm comm, Graph* graph) {
-	MPI_Status status[2];
-    MPI_Request request[2];
-    int size = 0;
-    int flag = 0;
-
-	MPI_Irecv(&size, 1, MPI_INT, source, tag, comm, &request[0]);
-
-	while (!terminate_flag.load(std::memory_order_relaxed)) {
-        MPI_Test(&request[0], &flag, &status[0]);
-        if (flag) break;
-	}
-
-	if (!flag) {
-        MPI_Cancel(&request[0]);
-        MPI_Request_free(&request[0]);
-        return Branch();
-    }
-	
-	std::vector<char> buffer(size, 0);
-
-	MPI_Irecv(buffer.data(), size, MPI_BYTE, source, tag, comm, &request[1]);
-    flag = 0;
-
-	while (!terminate_flag.load(std::memory_order_relaxed)) {
-        MPI_Test(&request[1], &flag, &status[1]);
-        if (flag) break;
-    }
-
-	if (!flag) {
-        MPI_Cancel(&request[1]);
-        MPI_Request_free(&request[1]);
-        return Branch();
-    }
-
-	/**
-	 *  No graph is sent, only history. 
-	 *  An empty graph is sent via buffer, it is replaced by the 
-	 *  GraphHistory
-	 */
-
-	
-	int lb, depth;
-	unsigned short ub;
-	const char* ptr = buffer.data();
-
-	std::memcpy(&lb, ptr, sizeof(lb));
-	ptr += sizeof(lb);
-	std::memcpy(&ub, ptr, sizeof(ub));
-	ptr += sizeof(ub);
-	std::memcpy(&depth, ptr, sizeof(depth));
-	ptr += sizeof(depth);
-
-
-	std::string data(buffer.begin() + sizeof(lb) + sizeof(ub) + sizeof(depth), 
-					 buffer.end());
-	Graph::GraphHistory history;
-	history.Deserialize(data);
-
-	graph->AddHistory(history);
-	Branch new_branch(std::move(std::unique_ptr<Graph>(graph)), lb, ub, depth);
-
-	return std::move(new_branch);
-}
-
 
 /**
  * thread_0_terminator - Listens for termination signals (solution found or
@@ -600,7 +491,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 			if (my_rank>0) {
 				//printMessage("Rank: " + std::to_string(my_rank) + " Waiting for work");
 				//std::cout << "Rank: " << my_rank << " Waiting for work" << std::endl;
-				branch_recv = recvInitialBranch(my_rank-1, TAG_INITIAL_WORK, MPI_COMM_WORLD, &g);
+				branch_recv = recvBranch(my_rank-1, TAG_INITIAL_WORK, MPI_COMM_WORLD);
 				int idle_status = 0;
 				MPI_Send(&idle_status, 1, MPI_INT, 0, TAG_IDLE, MPI_COMM_WORLD);
 				Log_par("[INITIALIZATION] First branch received from previous worker.", 1);
@@ -627,7 +518,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 
 			std::atomic<unsigned short> best_ub = branch_recv.ub;
 
-			queue.push(std::move(branch_recv));
+			queue.push(branch_recv);
 
 			}
 
@@ -647,7 +538,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 						", ub = " + std::to_string(ub), 0);
 
 					std::lock_guard<std::mutex> lock(queue_mutex);
-					queue.push(Branch(g.Clone(), lb, ub, 1));	// Initial branch with depth 1
+					queue.push(Branch(g.GetHistory(), lb, ub, 1));	// Initial branch with depth 1
 				}
 
 				bool distributed_work = false;
@@ -658,7 +549,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 					{
 						std::lock_guard<std::mutex> lock(queue_mutex);
 						if (!queue.empty()) { 
-							current = std::move(const_cast<Branch&>(queue.top()));
+							current = queue.top();
 							queue.pop();
 							has_work = true;
 						}
@@ -688,7 +579,8 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 						continue;
 					}
 
-					auto current_G = std::move(current.g);
+					auto current_G = g.Clone();
+					current_G->AddHistory(current.history);
 					int current_lb = current.lb;
 					unsigned short current_ub = current.ub;
 
@@ -765,7 +657,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 							current.depth);
 					{
 						std::lock_guard<std::mutex> lock(queue_mutex);
-						queue.push(Branch(std::move(G1), lb1, ub1, current.depth + 1));
+						queue.push(Branch(G1->GetHistory(), lb1, ub1, current.depth + 1));
 					}
 
 					// AddEdge
@@ -780,7 +672,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 							current.depth);
 					{
 						std::lock_guard<std::mutex> lock(queue_mutex);
-						queue.push(Branch(std::move(G2), lb2, ub2, current.depth + 1));
+						queue.push(Branch(G2->GetHistory(), lb2, ub2, current.depth + 1));
 					}
 
 					lock_task.unlock();
@@ -789,7 +681,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 						Log_par("Distributing work...", current.depth);
 						std::lock_guard<std::mutex> lock(queue_mutex);
 						if (!queue.empty()) {
-							current = std::move(const_cast<Branch&>(queue.top()));
+							current = queue.top();
 							queue.pop();
 						}
 						// If node to be distributed is optimal solution, dont distribute and stop.
@@ -803,7 +695,7 @@ int BranchNBoundPar::Solve(Graph& g, double &optimum_time, int timeout_seconds) 
 							break;
 						}
 						else {
-							sendInitialBranch(current, my_rank + 1, TAG_INITIAL_WORK, MPI_COMM_WORLD);
+							sendBranch(current, my_rank + 1, TAG_INITIAL_WORK, MPI_COMM_WORLD);
 						}
 						distributed_work = true;
 						}

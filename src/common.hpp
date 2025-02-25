@@ -39,7 +39,7 @@ void GetNeighbours(const Edges& edges, const unsigned int vertex_index,
  */
 using GraphPtr = std::unique_ptr<Graph>;
 struct Branch {
-	GraphPtr g;
+	Graph::GraphHistory history;
 	int lb;
 	unsigned short ub;
 	int depth;
@@ -48,21 +48,21 @@ struct Branch {
 	Branch() = default;
 
 	// Parameterized constructor
-	Branch(GraphPtr graph, int lower, unsigned short upper, int dp)
-	    : g(std::move(graph)), lb(lower), ub(upper), depth(dp) {}
+	Branch(const Graph::GraphHistory& history, int lower, unsigned short upper, int dp)
+	    : history(history), lb(lower), ub(upper), depth(dp) {}
 
 	// Copy constructor
 	Branch(const Branch& b)
-	    : g(b.g->Clone()), lb(b.lb), ub(b.ub), depth(b.depth) {}
+	    : history(b.history), lb(b.lb), ub(b.ub), depth(b.depth) {}
 
 	// Move constructor
 	Branch(Branch&& b) noexcept
-	    : g(std::move(b.g)), lb(b.lb), ub(b.ub), depth(b.depth) {}
+	    : history(b.history), lb(b.lb), ub(b.ub), depth(b.depth) {}
 
 	// Copy assignment operator
 	Branch& operator=(const Branch& other) {
 		if (this != &other) {
-			g = other.g->Clone();
+			history = other.history;
 			lb = other.lb;
 			ub = other.ub;
 			depth = other.depth;
@@ -73,7 +73,7 @@ struct Branch {
 	// Move assignment operator
 	Branch& operator=(Branch&& other) noexcept {
 		if (this != &other) {
-			g = std::move(other.g);
+			history = other.history;
 			lb = other.lb;
 			ub = other.ub;
 			depth = other.depth;
@@ -89,10 +89,10 @@ struct Branch {
 	// Method to serialize branch
 	std::vector<char> serialize() const {
 		std::vector<char> buffer;
-		std::string graphData = g->Serialize();
-		size_t graphSize = graphData.size();
+		std::string historyData = history.Serialize();
+		size_t historySize = historyData.size();
 	
-		buffer.resize(sizeof(lb) + sizeof(ub) + sizeof(depth) + sizeof(graphSize) + graphSize);
+		buffer.resize(sizeof(lb) + sizeof(ub) + sizeof(depth) + historySize);
 	
 		char* ptr = buffer.data();
 		std::memcpy(ptr, &lb, sizeof(lb));
@@ -101,9 +101,8 @@ struct Branch {
 		ptr += sizeof(ub);
 		std::memcpy(ptr, &depth, sizeof(depth));
 		ptr += sizeof(depth);
-		std::memcpy(ptr, &graphSize, sizeof(graphSize));
-		ptr += sizeof(graphSize);
-		std::memcpy(ptr, graphData.data(), graphSize);
+		// serializing GraphHistory
+		std::memcpy(ptr, historyData.data(), historySize);
 	
 		return buffer;
 	}
@@ -120,15 +119,10 @@ struct Branch {
 		std::memcpy(&b.depth, ptr, sizeof(b.depth));
 		ptr += sizeof(b.depth);
 	
-		size_t graphSize;
-		std::memcpy(&graphSize, ptr, sizeof(graphSize));
-		ptr += sizeof(graphSize);
-	
-		std::string graphData(ptr, graphSize);
-		// TODO: Add support to dynamically unserialize different graph types
-		b.g = std::make_unique<CSRGraph>();
-		b.g->Deserialize(graphData);
-		
+		// deserializing HistoryData
+		std::string historyData(buffer.begin() + sizeof(b.lb) + sizeof(b.ub) + sizeof(b.depth),
+								buffer.end());
+		b.history.Deserialize(historyData);
 		return b;
 	}
 };

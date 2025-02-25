@@ -44,7 +44,7 @@ int BranchNBoundSeq::Solve(Graph& g, int timeout_seconds,
 	using BranchQueue = std::priority_queue<Branch, std::vector<Branch>>;
 	BranchQueue queue;
 	queue.push(
-	    Branch(g.Clone(), lb, ub, 1));  // Initial branch with depth 1
+	    Branch(g.GetHistory(), lb, ub, 1));  // Initial branch with depth 1
 
 	// Counter for iterations where best_ub remains unchanged
 	int best_ub_unchanged_count = 0;
@@ -66,9 +66,10 @@ int BranchNBoundSeq::Solve(Graph& g, int timeout_seconds,
 		}
 
 		// Dequeue the next branch
-		Branch current = std::move(const_cast<Branch&>(queue.top()));
+		Branch current = queue.top();
 		queue.pop();
-		auto current_G = std::move(current.g);
+		auto current_G = g.Clone();
+		current_G->AddHistory(current.history);
 		int current_lb = current.lb;
 		unsigned short current_ub = current.ub;
 
@@ -129,7 +130,7 @@ int BranchNBoundSeq::Solve(Graph& g, int timeout_seconds,
 		    current.depth);
 		if (lb1 < best_ub) {
 			queue.push(
-			    Branch(std::move(G1), lb1, ub1, current.depth + 1));
+			    Branch(G1->GetHistory(), lb1, ub1, current.depth + 1));
 		}
 
 		// Branch 2 - Add edge between u and v (assign different colors)
@@ -143,7 +144,7 @@ int BranchNBoundSeq::Solve(Graph& g, int timeout_seconds,
 		    current.depth);
 		if ((lb2 < best_ub) && (lb2 < ub1)) {
 			queue.push(
-			    Branch(std::move(G2), lb2, ub2, current.depth + 1));
+			    Branch(G1->GetHistory(), lb2, ub2, current.depth + 1));
 		}
 
 		// Update best_ub
