@@ -56,7 +56,7 @@ bool BranchNBoundPar::CheckTimeout(
 
 
 void BranchNBoundPar::Log_par(const std::string& message, int depth) {
-    std::lock_guard<std::mutex> lock(log_mutex);
+    /*std::lock_guard<std::mutex> lock(log_mutex);
     if (_log_file.is_open()) {
         // Get the current MPI walltime
         double timestamp = MPI_Wtime();
@@ -72,7 +72,8 @@ void BranchNBoundPar::Log_par(const std::string& message, int depth) {
         _log_file << indentation << "[Rank " << rank
                       << " | Thread " << thread_id << "] "
                       << "[Time " << timestamp << "] " << message << std::endl;
-    }
+    }*/
+	return;
 }
 
 void printMessage(const std::string& msg) {
@@ -667,7 +668,7 @@ bool BalancedBranchNBoundPar::CheckTimeout(
 
 
 void BalancedBranchNBoundPar::Log_par(const std::string& message, int depth) {
-    std::lock_guard<std::mutex> lock(log_mutex);
+    /*std::lock_guard<std::mutex> lock(log_mutex);
     if (_log_file.is_open()) {
         // Get the current MPI walltime
         double timestamp = MPI_Wtime();
@@ -683,7 +684,8 @@ void BalancedBranchNBoundPar::Log_par(const std::string& message, int depth) {
         _log_file << indentation << "[Rank " << rank
                       << " | Thread " << thread_id << "] "
                       << "[Time " << timestamp << "] " << message << std::endl;
-    }
+    }*/
+	return;
 }
 
 
