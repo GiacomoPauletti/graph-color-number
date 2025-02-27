@@ -813,62 +813,67 @@ void BalancedBranchNBoundPar::thread_0_terminator(int my_rank, int p, int global
 *   p (int)           : The number of processes in the MPI communicator.
 *   best_ub (int*)    : Pointer to the variable holding the best upper bound.
 */
-void BalancedBranchNBoundPar::thread_1_solution_gatherer(int p, int sol_gather_period) { 
-	std::vector<unsigned short> all_best_ub(p);
-	auto last_gather_time = MPI_Wtime();
-	MPI_Request request;
-	int request_active = 0;
+void BalancedBranchNBoundPar::thread_1_solution_gatherer(int p, int sol_gather_period) {
+    auto last_gather_time = MPI_Wtime();
+    MPI_Request reduce_request, bcast_request;
+    int reduce_active = 0, bcast_active = 0;
+    unsigned short global_best_ub = std::numeric_limits<unsigned short>::max();
+    unsigned short local_best_ub;
 
-	while (!terminate_flag.load(std::memory_order_relaxed)) {
-		auto current_time = MPI_Wtime();
-		auto elapsed_time = current_time - last_gather_time;
+    while (!terminate_flag.load(std::memory_order_relaxed)) {
+        auto current_time = MPI_Wtime();
+        auto elapsed_time = current_time - last_gather_time;
 
-		if (elapsed_time >= sol_gather_period) {
-			unsigned short local_best_ub = _best_ub.load(); // safe read
+        if (elapsed_time >= sol_gather_period) {
+            local_best_ub = _best_ub.load(); // Safe read
+            if (terminate_flag.load(std::memory_order_relaxed)) return;
 
-		if (terminate_flag.load(std::memory_order_relaxed)) {
-			return;
-	}
+            // Start non-blocking reduction (min operation)
+            MPI_Ireduce(&local_best_ub, &global_best_ub, 1, MPI_UNSIGNED_SHORT, MPI_MIN, 0, MPI_COMM_WORLD, &reduce_request);
+            reduce_active = 1;
 
-	// Start non-blocking allgather
-	MPI_Iallgather(&local_best_ub, 1, MPI_UNSIGNED_SHORT, all_best_ub.data(), 1, MPI_UNSIGNED_SHORT, MPI_COMM_WORLD, &request);
-	request_active = 1;
+            // Wait for reduction completion
+            MPI_Status status;
+            while (true) {
+                int flag = 0;
+                MPI_Test(&reduce_request, &flag, &status);
+                if (flag) break;
+                if (terminate_flag.load(std::memory_order_relaxed)) {
+                    if (reduce_active) MPI_Cancel(&reduce_request);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            reduce_active = 0;
 
-	// Wait for completion with timeout handling (or simply test it periodically)
-	MPI_Status status;
-	while (true) {
-	int flag = 0;
-	MPI_Test(&request, &flag, &status);
-	if (flag) break;  // The operation is completed
+            // Root process broadcasts the best value
+            MPI_Ibcast(&global_best_ub, 1, MPI_UNSIGNED_SHORT, 0, MPI_COMM_WORLD, &bcast_request);
+            bcast_active = 1;
 
-	// If termination flag is set, cancel the request to avoid deadlock
-	if (terminate_flag.load(std::memory_order_relaxed)) {
-	if (request_active && flag) {
-	MPI_Cancel(&request);
-	MPI_Request_free(&request);
-	}
-	return;
-	}
+            // Wait for broadcast completion
+            while (true) {
+                int flag = 0;
+                MPI_Test(&bcast_request, &flag, &status);
+                if (flag) break;
+                if (terminate_flag.load(std::memory_order_relaxed)) {
+                    if (bcast_active) MPI_Cancel(&bcast_request);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            bcast_active = 0;
 
-	std::this_thread::sleep_for(std::chrono::milliseconds(100));
-	}
-	request_active = 0;
-
-	// Update the best upper bound for other threads in shared memory
-	Log_par("[UPDATE] Gathered best_ub " + std::to_string(_best_ub), 0);
-	_best_ub.store(*std::min_element(all_best_ub.begin(), all_best_ub.end()));  // safe write
-
-	// Reset the timer
-	last_gather_time = current_time;
-	}
-
-	std::this_thread::sleep_for(std::chrono::milliseconds(100));
-	}
-	if (request_active) {
-		MPI_Cancel(&request);
-		MPI_Request_free(&request);
-	}
+            // Update local best upper bound
+            Log_par("[UPDATE] Gathered best_ub " + std::to_string(global_best_ub), 0);
+            _best_ub.store(global_best_ub);
+            last_gather_time = current_time; // Reset timer
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (reduce_active) MPI_Cancel(&reduce_request);
+    if (bcast_active) MPI_Cancel(&bcast_request);
 }
+
 
 
 void BalancedBranchNBoundPar::thread_2_employer(std::mutex& queue_mutex, BranchQueue& queue) {

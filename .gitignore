@@ -43,4 +43,4 @@ build/
 *.clq
 
 # logs
-*log_*.txt
+#*log_*.txt
