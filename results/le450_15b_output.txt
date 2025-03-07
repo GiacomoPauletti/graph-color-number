@@ -3,8 +3,8 @@ cmd line
 solver version 
 number_of_vertices 450
 number_of_edges: 8169
-time_limit_sec 10000
-number_of_worker_processes 1024
+time_limit_sec 3600
+number_of_worker_processes 512
 number_of_cores_per_worker 4
 wall_time_sec > 10000
 is_within_time_limit 0
